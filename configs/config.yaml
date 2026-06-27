@@ -1,0 +1,172 @@
+# =====================================================================
+# Smart Irrigation IQL — Configuration
+# Crop: English cucumber, greenhouse, Telangana
+# Last calibrated against Fyllo data Feb 28 – Apr 27, 2026
+# =====================================================================
+
+experiment:
+  name: "cucumber_iql_v1"
+  seed: 42
+  log_dir: "./artifacts/logs"
+  checkpoint_dir: "./artifacts/ckpts"
+
+# ---------- Crop parameters (FAO-56, Allen et al. 1998, Table 12) ----
+# Greenhouse cucumber values; Kc is dual-coefficient. For single-Kc
+# (used by the simulator), these are taken from the cucumber row of
+# FAO-56 with greenhouse adjustment of -10% on Kc_mid per Castilla 2013.
+crop:
+  name: "english_cucumber_greenhouse"
+  # Stage length in days (typical greenhouse cucumber, total ~90 d)
+  stage_days:
+    initial: 12        # transplant to vegetative establishment
+    development: 18    # vegetative growth, before first flower
+    mid: 35            # flowering through peak fruiting
+    late: 25           # senescence to last harvest
+  # Crop coefficient by stage (Kc)
+  Kc:
+    initial: 0.60
+    mid: 1.00          # FAO-56 cucumber Kc_mid = 1.10; -10% for greenhouse
+    late: 0.75
+  # Plant density and rooting
+  plants_per_m2: 5.56   # CONFIRMED: 0.40 m plant-to-plant x 0.45 m row-to-row = 0.18 m^2/plant
+  root_depth_m_initial: 0.10
+  root_depth_m_max: 0.40
+  # Sensitive stages where water stress is most costly
+  sensitive_stages: ["flowering", "fruiting"]
+  # Optimal volumetric water content band per stage (% of saturation,
+  # which is what the Fyllo "moisture %" sensor returns — see notes)
+  optimal_moisture_band:
+    initial:     [65, 90]
+    development: [70, 90]
+    mid:         [75, 95]    # tightest band, most sensitive
+    late:        [60, 85]
+  # Management allowed depletion (fraction of TAW)
+  MAD: 0.35
+
+# ---------- Soil parameters (net house soil, Telangana) --------
+# CALIBRATION SOURCE:
+#   Primary: Soil Sensor Reading Log (pots 2-5, 22-26 May 2026).
+#   Secondary: Fyllo Excel (Feb-Apr 2026, used for Ke_max and Ra priors).
+#
+# Net house soil drying rate (no-irrigation rows): ~3.5 %/h
+# Implied tau_drain_h from log: (FC - WP) / drying_rate = 80/12.5 ≈ 6.4 h
+#   (versus the Fyllo estimate of 48h which saturated at the upper bound;
+#    this is more identifiable because the pot experiment has a sandy-soil
+#    contrast that validates the net house soil's slower drainage)
+#
+# IMPORTANT: These values are estimated from 5 days of pot data. They will
+# be revised as more readings accumulate. Treat as an informed prior.
+#
+# FC = 95 % (sensor saturation; net house soil retains water strongly)
+# WP = 25 %  (conservative; sensor unreliable below ~15%, using 25% as safe bound)
+soil:
+  field_capacity_pct: 95.0        # updated from 80 → 95 (sensor FC, net house soil)
+  wilting_point_pct: 25.0
+  saturation_pct: 100.0
+  surface_layer_depth_m: 0.10
+  deep_layer_depth_m: 0.30
+  # Drainage time constant (h) — re-calibrated from net house soil drying curves
+  # (22-26 May 2026 pot experiment, no-irrigation rows, pots 2-5)
+  tau_drain_h: 23.8               # log-calibrated (10 days, 289 transitions, 22-31 May 2026)
+  # Bare-soil evaporation (greenhouse, covered surface)
+  Ke_max: 0.20
+
+# ---------- Hardware / actuation ----------
+actuator:
+  # DEPLOYMENT: no solenoid valve yet. The agent outputs a VOLUME (litres per
+  # plant) at two fixed decision windows; a human executes it by hand/drip.
+  # Action space: discrete litres-per-plant per session.
+  action_litres_per_plant: [0.0, 0.25, 0.5, 1.0, 1.5, 2.0]
+  # Drip flow rate per emitter (L/h) — used only to translate litres into an
+  # equivalent run-time for the field worker (display convenience).
+  emitter_rate_L_per_h: 2.0
+  emitters_per_plant: 1
+  # Hard safety caps
+  max_daily_volume_L_per_plant: 4.0   # absolute upper bound per plant per day
+  # Two decision windows per day (24-h local time): 9 AM and 2 PM
+  decision_hours: [9, 14]
+  # Sensor logging cadence (Rapidcircuitry nodes): 15 minutes
+  sensor_interval_minutes: 15
+
+# ---------- State / observation ----------
+state:
+  features:
+    - moisture_surface
+    - moisture_deep
+    - soil_temperature
+    - delta_moisture_surface_1h
+    - delta_moisture_deep_1h
+    - hour_sin
+    - hour_cos
+    - day_since_transplant_norm
+    - stage_onehot_initial
+    - stage_onehot_development
+    - stage_onehot_mid
+    - stage_onehot_late
+    - cum_water_today_norm
+    - hours_since_last_irrigation_norm
+
+# ---------- Reward ----------
+# r = -alpha * volume_norm  -  beta * stress  -  gamma * over_moisture
+#     + terminal_yield_bonus (only at harvest step)
+reward:
+  alpha_water: 0.30          # water cost weight
+  beta_stress: 1.50          # below-target moisture penalty
+  gamma_oversat: 0.40        # over-saturation penalty (anoxia risk)
+  yield_terminal_weight: 5.0 # weight on terminal yield bonus
+
+# ---------- IQL hyperparameters (Kostrikov et al. ICLR 2022) --------
+iql:
+  # expectile for V (paper: 0.7–0.9; higher = more optimistic)
+  tau_expectile: 0.80
+  # advantage-weighted regression temperature (paper: 3.0–10.0)
+  beta_awr: 3.0
+  # max AWR weight to prevent explosion
+  awr_weight_max: 100.0
+  # Discount factor — episode length is ~90 days × 48 steps = 4320,
+  # so a long-horizon discount is appropriate
+  gamma: 0.995
+  # Target net polyak averaging
+  polyak_tau: 0.005
+  # Networks
+  hidden_dim: 256
+  hidden_layers: 3
+  activation: "relu"
+  # Optimizer
+  lr_actor: 3.0e-4
+  lr_critic: 3.0e-4
+  lr_value: 3.0e-4
+  batch_size: 256
+  grad_clip: 1.0
+
+# ---------- Training ----------
+training:
+  # Number of simulated trajectories to generate for the offline dataset
+  n_sim_trajectories: 400
+  # Mix of behavior policies that generate the offline data
+  behavior_policy_mix:
+    fao56_threshold: 0.4    # FAO-56 heuristic — gives reasonable trajectories
+    random: 0.2             # random actions — coverage
+    aggressive_water: 0.2   # over-watering — show the agent the cost
+    deficit_water: 0.2      # deficit — show the agent stress
+  # Gradient steps
+  total_grad_steps: 200000
+  eval_every_steps: 5000
+  save_every_steps: 20000
+  # Curriculum: also add real-data transitions (with imputed actions)
+  use_real_data_warmstart: true
+  # Path to soil sensor reading log (hand-recorded pot experiment)
+  # Transitions from this file have REAL action labels — higher quality
+  # than the Fyllo null-action warmstart.
+  soil_log_path: "./data/soil_log.csv"
+
+# ---------- Online update from T0/T1/T2 streams -------------------
+online:
+  # Update simulator dynamics every N hours of new data
+  dynamics_update_every_h: 24
+  # Min new transitions before any IQL retraining
+  min_new_transitions: 200
+  # Trust radius — how much the new IQL is allowed to diverge from current
+  trust_kl_threshold: 0.5
+  # Safety: never deploy a new policy until shadow-tested for these many days
+  shadow_test_days: 3

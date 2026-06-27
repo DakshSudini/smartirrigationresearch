@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Irrigation Advisor — T2</title>
+<style>
+  :root{--bg:#0f1f17;--card:#16271d;--ink:#eaf3ee;--muted:#9fb6a8;
+    --accent:#4ade80;--accent-d:#22a35a;--warn:#f4b942;--line:#27392d;}
+  *{box-sizing:border-box}
+  body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
+    background:var(--bg);color:var(--ink);min-height:100vh}
+  .wrap{max-width:560px;margin:0 auto;padding:20px 16px 48px}
+  h1{font-size:1.35rem;margin:8px 0 2px}
+  .sub{color:var(--muted);font-size:.92rem;margin-bottom:18px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:16px;
+    padding:18px;margin-bottom:16px}
+  .step{font-size:.78rem;color:var(--accent);letter-spacing:.06em;
+    text-transform:uppercase;margin-bottom:8px}
+  label{display:block;font-size:.92rem;color:var(--muted);margin:12px 0 6px}
+  input[type=file]{width:100%;padding:12px;border-radius:12px;border:1px solid var(--line);
+    background:#0e1b14;color:var(--ink);font-size:.98rem}
+  input[type=number]{width:100%;padding:13px;border-radius:12px;border:1px solid var(--line);
+    background:#0e1b14;color:var(--ink);font-size:1.05rem}
+  .toggle{display:flex;gap:10px;margin-top:6px}
+  .toggle button{flex:1;padding:12px;border-radius:10px;border:1px solid var(--line);
+    background:#0e1b14;color:var(--muted);font-size:1rem;cursor:pointer}
+  .toggle button.on{background:var(--accent);color:#06210f;border-color:var(--accent);font-weight:700}
+  .hidden{display:none}
+  button.primary{width:100%;padding:16px;border:0;border-radius:12px;font-size:1.15rem;
+    font-weight:700;cursor:pointer;background:var(--accent);color:#06210f;margin-top:18px}
+  button.primary:active{background:var(--accent-d)}
+  .result{display:none;text-align:center;padding:26px 18px;
+    background:linear-gradient(160deg,#16271d,#1a2f22)}
+  .result .big{font-size:3.4rem;font-weight:800;color:var(--accent);line-height:1.05}
+  .result .unit{font-size:1.1rem;color:var(--muted);margin-top:4px}
+  .result .sub2{margin-top:14px;font-size:1.02rem}
+  .pill{display:inline-block;background:#0e1b14;border:1px solid var(--line);
+    border-radius:999px;padding:5px 13px;font-size:.8rem;color:var(--muted);margin-top:14px}
+  .readout{font-size:.86rem;color:var(--muted);margin-top:10px}
+  .status{font-size:.82rem;color:var(--muted);text-align:center;margin-top:8px}
+  .err{color:var(--warn)}
+  a.small{color:var(--muted);font-size:.82rem;text-decoration:none;display:block;
+    text-align:center;margin-top:22px}
+  .spin{display:inline-block;width:16px;height:16px;border:3px solid var(--line);
+    border-top-color:var(--accent);border-radius:50%;animation:s .8s linear infinite;
+    vertical-align:middle}
+  @keyframes s{to{transform:rotate(360deg)}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>🌱 Irrigation Advisor</h1>
+  <div class="sub">Plot T2 — upload the node's SD-card file and get watering advice.</div>
+
+  <div class="card">
+    <div class="step">Step 1 · Sensor file</div>
+    <label>Upload the CSV from the node's SD card</label>
+    <input id="file" type="file" accept=".csv">
+    <div class="readout" id="fileNote"></div>
+  </div>
+
+  <div class="card">
+    <div class="step">Step 2 · Did it rain since last time?</div>
+    <div class="toggle">
+      <button id="rainNo" class="on" onclick="setRain(false)">No</button>
+      <button id="rainYes" onclick="setRain(true)">Yes</button>
+    </div>
+    <div id="rainBox" class="hidden">
+      <label>About how many hours of rain?</label>
+      <input id="rainHours" type="number" inputmode="decimal" min="0" step="0.5" placeholder="e.g. 1.5">
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="step">Step 3 · Did you water since last time?</div>
+    <div class="toggle">
+      <button id="irrNo" class="on" onclick="setIrr(false)">No</button>
+      <button id="irrYes" onclick="setIrr(true)">Yes</button>
+    </div>
+    <div id="irrBox" class="hidden">
+      <label>For how many minutes did the drip run?</label>
+      <input id="irrMin" type="number" inputmode="decimal" min="0" step="5" placeholder="e.g. 30">
+    </div>
+  </div>
+
+  <button class="primary" id="go">Get watering advice</button>
+
+  <div class="card result" id="result">
+    <div class="big" id="bigNum">—</div>
+    <div class="unit" id="bigUnit">minutes of drip</div>
+    <div class="sub2" id="resNote"></div>
+    <div class="pill" id="resPill"></div>
+    <div class="readout" id="readingNote"></div>
+  </div>
+
+  <div class="status" id="modelStatus"></div>
+  <a class="small" href="/research">Researcher view →</a>
+</div>
+
+<script>
+const PLANTING = "2026-06-08";
+let rained=false, irrigated=false;
+function setRain(v){rained=v;
+  document.getElementById('rainYes').classList.toggle('on',v);
+  document.getElementById('rainNo').classList.toggle('on',!v);
+  document.getElementById('rainBox').classList.toggle('hidden',!v);}
+function setIrr(v){irrigated=v;
+  document.getElementById('irrYes').classList.toggle('on',v);
+  document.getElementById('irrNo').classList.toggle('on',!v);
+  document.getElementById('irrBox').classList.toggle('hidden',!v);}
+document.getElementById('file').onchange=(e)=>{const f=e.target.files[0];
+  document.getElementById('fileNote').textContent=f?`Selected: ${f.name}`:'';};
+async function refreshStatus(){try{
+  const s=await (await fetch('/api/status')).json();
+  document.getElementById('modelStatus').textContent=
+    `Model v${s.model_version??0} · ${s.state}`+(s.message?` · ${s.message}`:'');
+}catch(e){}}
+document.getElementById('go').onclick=async ()=>{
+  const f=document.getElementById('file').files[0];
+  if(!f){alert('Please choose the CSV from the SD card first.');return;}
+  const fd=new FormData();
+  fd.append('file',f); fd.append('planting_date',PLANTING);
+  fd.append('rained',rained?'yes':'no');
+  fd.append('rain_hours',rained?(document.getElementById('rainHours').value||0):0);
+  fd.append('irrigated',irrigated?'yes':'no');
+  fd.append('irrigation_minutes',irrigated?(document.getElementById('irrMin').value||0):0);
+  const res=document.getElementById('result'); res.style.display='block';
+  document.getElementById('bigNum').innerHTML='<span class="spin"></span>';
+  document.getElementById('bigUnit').textContent='reading file…';
+  document.getElementById('resNote').textContent='';
+  document.getElementById('resPill').textContent='';
+  document.getElementById('readingNote').textContent='';
+  try{
+    const r=await fetch('/api/upload',{method:'POST',body:fd});
+    const d=await r.json();
+    if(!d.ok){document.getElementById('bigNum').textContent='!';
+      document.getElementById('bigUnit').className='unit err';
+      document.getElementById('bigUnit').textContent=d.error||'Error';return;}
+    const rec=d.recommendation, lr=d.latest_reading;
+    document.getElementById('bigNum').textContent=rec.drip_minutes;
+    document.getElementById('bigUnit').className='unit';
+    document.getElementById('bigUnit').textContent=
+      rec.drip_minutes===0?'no watering needed':'minutes of drip';
+    document.getElementById('resNote').textContent=
+      rec.drip_minutes===0?'Soil is wet enough for now.':`${rec.litres_per_plant} litres per plant`;
+    document.getElementById('resPill').textContent=
+      `${rec.stage} · advises for ${rec.time} · model v${rec.model_version}`;
+    document.getElementById('readingNote').textContent=
+      `Latest reading from file: ${lr.moisture_pct}% moisture`+
+      (d.events_logged.length?` · logged: ${d.events_logged.map(e=>e.type).join(', ')}`:'')+
+      ` · model is refining safely in the background.`;
+    setTimeout(refreshStatus,1500);
+  }catch(e){document.getElementById('bigUnit').className='unit err';
+    document.getElementById('bigUnit').textContent='Could not reach server';}
+};
+refreshStatus(); setInterval(refreshStatus,8000);
+</script>
+</body>
+</html>

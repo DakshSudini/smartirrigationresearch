@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Irrigation Advisor — Research view</title>
+<style>
+  body{margin:0;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+       background:#0d1117;color:#c9d1d9;padding:24px;max-width:900px;margin:auto}
+  h1{font-size:1.2rem;color:#e6edf3}
+  .card{background:#161b22;border:1px solid #21262d;border-radius:10px;
+        padding:16px;margin:14px 0}
+  .kv{display:flex;justify-content:space-between;border-bottom:1px solid #21262d;
+      padding:6px 0;font-size:.9rem}
+  .kv:last-child{border:0}
+  table{width:100%;border-collapse:collapse;font-size:.82rem}
+  th,td{text-align:left;padding:6px 8px;border-bottom:1px solid #21262d}
+  th{color:#8b949e}
+  .ev-promote{color:#4ade80}.ev-reject{color:#f4b942}
+  .ev-quarantine{color:#f87171}.ev-error{color:#f87171}
+  a{color:#58a6ff;text-decoration:none}
+  .muted{color:#8b949e;font-size:.82rem}
+</style>
+</head>
+<body>
+<h1>Smart Irrigation — Researcher view</h1>
+<p class="muted">Model lifecycle, calibration state, and the full audit trail.
+Every upload and every promote/reject decision is logged here for reproducibility.</p>
+
+<div class="card">
+  <div class="kv"><span>State</span><b id="state">—</b></div>
+  <div class="kv"><span>Model version</span><b id="ver">—</b></div>
+  <div class="kv"><span>Last refine</span><b id="last">—</b></div>
+  <div class="kv"><span>Message</span><b id="msg">—</b></div>
+</div>
+
+<div class="card">
+  <b>Audit log</b> <span class="muted">(most recent first)</span>
+  <table id="audit"><thead><tr><th>Time (UTC)</th><th>Event</th><th>Details</th></tr></thead>
+  <tbody></tbody></table>
+</div>
+
+<a href="/">← Farm view</a>
+
+<script>
+async function refresh(){
+  const s = await (await fetch('/api/status')).json();
+  document.getElementById('state').textContent = s.state ?? '—';
+  document.getElementById('ver').textContent = s.model_version ?? 0;
+  document.getElementById('last').textContent = s.last_refine ?? '—';
+  document.getElementById('msg').textContent = s.message ?? '—';
+
+  const a = await (await fetch('/api/audit?limit=80')).json();
+  const tb = document.querySelector('#audit tbody'); tb.innerHTML='';
+  for(const e of a.entries){
+    const tr = document.createElement('tr');
+    const {ts, event, ...rest} = e;
+    const cls = 'ev-' + (event.split('_').pop());
+    tr.innerHTML = `<td>${ts.replace('T',' ').replace('Z','')}</td>`
+      + `<td class="${cls}">${event}</td>`
+      + `<td>${Object.entries(rest).map(([k,v])=>`${k}=${v}`).join(' · ')}</td>`;
+    tb.appendChild(tr);
+  }
+}
+refresh(); setInterval(refresh, 5000);
+</script>
+</body>
+</html>
