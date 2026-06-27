@@ -3,41 +3,77 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Irrigation Advisor — Research view</title>
+<title>Irrigation Advisor — Researcher</title>
 <style>
   body{margin:0;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
        background:#0d1117;color:#c9d1d9;padding:24px;max-width:900px;margin:auto}
-  h1{font-size:1.2rem;color:#e6edf3}
+  h1{font-size:1.2rem;color:#e6edf3;margin-bottom:4px}
+  .sub{color:#8b949e;font-size:.85rem;margin-bottom:24px}
   .card{background:#161b22;border:1px solid #21262d;border-radius:10px;
-        padding:16px;margin:14px 0}
+        padding:18px;margin:14px 0}
+  .card h2{font-size:.95rem;color:#e6edf3;margin:0 0 14px}
   .kv{display:flex;justify-content:space-between;border-bottom:1px solid #21262d;
-      padding:6px 0;font-size:.9rem}
+      padding:7px 0;font-size:.9rem}
   .kv:last-child{border:0}
-  table{width:100%;border-collapse:collapse;font-size:.82rem}
+  .kv b{color:#e6edf3}
+  input[type=file],input[type=password]{width:100%;padding:10px;border-radius:8px;
+        border:1px solid #21262d;background:#0d1117;color:#c9d1d9;
+        font-size:.9rem;margin:8px 0}
+  button{padding:10px 20px;border:0;border-radius:8px;font-size:.9rem;
+        font-weight:600;cursor:pointer}
+  .primary{background:#238636;color:#fff}
+  .primary:hover{background:#2ea043}
+  .msg{margin-top:10px;font-size:.85rem;padding:8px 12px;border-radius:6px}
+  .ok{background:#0f2d0f;border:1px solid #238636;color:#4ade80}
+  .err{background:#2d0f0f;border:1px solid #f87171;color:#f87171}
+  table{width:100%;border-collapse:collapse;font-size:.82rem;margin-top:10px}
   th,td{text-align:left;padding:6px 8px;border-bottom:1px solid #21262d}
   th{color:#8b949e}
   .ev-promote{color:#4ade80}.ev-reject{color:#f4b942}
-  .ev-quarantine{color:#f87171}.ev-error{color:#f87171}
+  .ev-quarantine,.ev-error{color:#f87171}
+  .ev-field_event{color:#58a6ff}
+  .ev-model_uploaded{color:#a78bfa}
   a{color:#58a6ff;text-decoration:none}
   .muted{color:#8b949e;font-size:.82rem}
+  .tag{display:inline-block;background:#21262d;border-radius:4px;
+       padding:2px 8px;font-size:.78rem;color:#8b949e;margin-left:6px}
 </style>
 </head>
 <body>
 <h1>Smart Irrigation — Researcher view</h1>
-<p class="muted">Model lifecycle, calibration state, and the full audit trail.
-Every upload and every promote/reject decision is logged here for reproducibility.</p>
+<p class="sub">Model lifecycle, upload new checkpoints, and the full audit trail.</p>
 
+<!-- Model status -->
 <div class="card">
+  <h2>Model status</h2>
   <div class="kv"><span>State</span><b id="state">—</b></div>
-  <div class="kv"><span>Model version</span><b id="ver">—</b></div>
-  <div class="kv"><span>Last refine</span><b id="last">—</b></div>
+  <div class="kv"><span>Version</span><b id="ver">—</b></div>
+  <div class="kv"><span>Last updated</span><b id="last">—</b></div>
   <div class="kv"><span>Message</span><b id="msg">—</b></div>
 </div>
 
+<!-- Upload new model -->
 <div class="card">
-  <b>Audit log</b> <span class="muted">(most recent first)</span>
-  <table id="audit"><thead><tr><th>Time (UTC)</th><th>Event</th><th>Details</th></tr></thead>
-  <tbody></tbody></table>
+  <h2>Upload retrained model <span class="tag">researcher only</span></h2>
+  <p class="muted">After retraining on your laptop, upload the new
+  <code>artifacts/ckpts/iql_final.pt</code> here. The server will validate it
+  and swap it in immediately — no restart needed.</p>
+  <label class="muted">Admin key (set in your Render environment variables)</label>
+  <input type="password" id="adminKey" placeholder="Enter admin key">
+  <label class="muted">Checkpoint file (.pt)</label>
+  <input type="file" id="modelFile" accept=".pt">
+  <br>
+  <button class="primary" id="uploadModel">Upload new model</button>
+  <div id="uploadMsg"></div>
+</div>
+
+<!-- Audit log -->
+<div class="card">
+  <h2>Audit log <span class="muted">(most recent first)</span></h2>
+  <table id="audit">
+    <thead><tr><th>Time (UTC)</th><th>Event</th><th>Details</th></tr></thead>
+    <tbody></tbody>
+  </table>
 </div>
 
 <a href="/">← Farm view</a>
@@ -46,22 +82,54 @@ Every upload and every promote/reject decision is logged here for reproducibilit
 async function refresh(){
   const s = await (await fetch('/api/status')).json();
   document.getElementById('state').textContent = s.state ?? '—';
-  document.getElementById('ver').textContent = s.model_version ?? 0;
-  document.getElementById('last').textContent = s.last_refine ?? '—';
-  document.getElementById('msg').textContent = s.message ?? '—';
+  document.getElementById('ver').textContent   = 'v' + (s.model_version ?? 0);
+  document.getElementById('last').textContent  = s.last_refine
+    ? s.last_refine.replace('T',' ').replace('Z',' UTC') : '—';
+  document.getElementById('msg').textContent   = s.message ?? '—';
 
-  const a = await (await fetch('/api/audit?limit=80')).json();
-  const tb = document.querySelector('#audit tbody'); tb.innerHTML='';
+  const a = await (await fetch('/api/audit?limit=100')).json();
+  const tb = document.querySelector('#audit tbody');
+  tb.innerHTML = '';
   for(const e of a.entries){
-    const tr = document.createElement('tr');
     const {ts, event, ...rest} = e;
-    const cls = 'ev-' + (event.split('_').pop());
-    tr.innerHTML = `<td>${ts.replace('T',' ').replace('Z','')}</td>`
+    const tr = document.createElement('tr');
+    const cls = 'ev-' + event.replace(/[^a-z_]/g,'');
+    tr.innerHTML =
+      `<td>${ts.replace('T',' ').replace('Z','')}</td>`
       + `<td class="${cls}">${event}</td>`
       + `<td>${Object.entries(rest).map(([k,v])=>`${k}=${v}`).join(' · ')}</td>`;
     tb.appendChild(tr);
   }
 }
+
+document.getElementById('uploadModel').onclick = async () => {
+  const key  = document.getElementById('adminKey').value.trim();
+  const file = document.getElementById('modelFile').files[0];
+  const msg  = document.getElementById('uploadMsg');
+  if(!key){ msg.className='msg err'; msg.textContent='Enter the admin key first.'; return; }
+  if(!file){ msg.className='msg err'; msg.textContent='Choose a .pt file first.'; return; }
+  msg.className='msg'; msg.textContent='Uploading…';
+  const fd = new FormData();
+  fd.append('file', file);
+  try{
+    const r = await fetch('/api/upload_model', {
+      method:'POST', body:fd,
+      headers:{'x-admin-key': key}
+    });
+    const d = await r.json();
+    if(d.ok){
+      msg.className='msg ok';
+      msg.textContent = '✓ ' + d.message;
+      refresh();
+    } else {
+      msg.className='msg err';
+      msg.textContent = d.detail || d.error || 'Upload failed.';
+    }
+  }catch(e){
+    msg.className='msg err'; msg.textContent='Could not reach server.';
+  }
+};
+
 refresh(); setInterval(refresh, 5000);
 </script>
 </body>

@@ -24,11 +24,12 @@ import shutil
 from datetime import datetime, date
 from pathlib import Path
 
-from fastapi import FastAPI, File, UploadFile, Form, HTTPException
+import os, secrets
+from fastapi import FastAPI, File, UploadFile, Form, HTTPException, Header
 from fastapi.responses import HTMLResponse, JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from model_service import (ModelService, read_status, AUDIT_LOG, UPLOADS)
+from model_service import (ModelService, read_status, AUDIT_LOG, UPLOADS, MODELS)
 
 HERE = Path(__file__).resolve().parent
 app = FastAPI(title="Smart Irrigation Advisor (T2)")
@@ -108,6 +109,40 @@ async def api_recommend(moisture_pct: float = Form(...),
 @app.get("/api/status")
 def api_status():
     return JSONResponse(read_status())
+
+
+@app.post("/api/upload_model")
+async def api_upload_model(file: UploadFile = File(...),
+                           x_admin_key: str = Header(...)):
+    """
+    Researcher uploads a newly trained iql_final.pt from their laptop.
+    Protected by a secret key set in the ADMIN_KEY environment variable.
+    """
+    expected = os.environ.get("ADMIN_KEY", "")
+    if not expected or not secrets.compare_digest(x_admin_key, expected):
+        raise HTTPException(403, "Invalid admin key.")
+    if not file.filename.endswith(".pt"):
+        raise HTTPException(400, "Please upload a .pt checkpoint file.")
+    import shutil
+    dest = MODELS / "live.pt"
+    tmp  = MODELS / "incoming.pt"
+    with open(tmp, "wb") as f:
+        shutil.copyfileobj(file.file, f)
+    # Validate: try loading as a state dict
+    try:
+        import torch
+        torch.load(tmp, map_location="cpu", weights_only=False)
+    except Exception as e:
+        tmp.unlink(missing_ok=True)
+        raise HTTPException(400, f"File does not look like a valid checkpoint: {e}")
+    tmp.replace(dest)
+    # Reload the live model
+    service._load_live_or_bootstrap()
+    from model_service import audit
+    audit("model_uploaded", filename=file.filename)
+    return JSONResponse({"ok": True,
+                         "message": f"Model updated from {file.filename}. "
+                                    f"New version: {read_status().get('model_version',0)}"})
 
 
 @app.get("/api/audit")
