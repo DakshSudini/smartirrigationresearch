@@ -1,0 +1,7 @@
+{
+  "state": "ready",
+  "model_version": 1,
+  "last_refine": "2026-06-26T09:45:39.337999Z",
+  "message": "Bootstrapped from packaged model.",
+  "note": "bootstrapped from packaged checkpoint"
+}

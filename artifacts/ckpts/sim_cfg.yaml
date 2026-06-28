@@ -1,0 +1,24 @@
+ET0_max_mm_day: 14.0
+FC: 95.0
+Kc:
+  initial: 0.6
+  late: 0.75
+  mid: 1.0
+Ke_max: 0.2
+Ra_MJ_m2_day: 42.00000000000001
+SAT: 100.0
+WP: 25.0
+deep_depth_m: 0.3
+plants_per_m2: 5.56
+root_depth_init_m: 0.1
+root_depth_max_m: 0.4
+shade_et0_factor: 0.8
+sigma_M: 10.979222697333778
+sigma_T: 0.3
+stage_days:
+  development: 18
+  initial: 12
+  late: 25
+  mid: 35
+surface_depth_m: 0.1
+tau_drain_h: 72.0
