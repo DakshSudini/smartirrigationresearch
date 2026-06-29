@@ -6,7 +6,7 @@
 <title>Irrigation Advisor — T2</title>
 <style>
   :root{--bg:#0f1f17;--card:#16271d;--ink:#eaf3ee;--muted:#9fb6a8;
-    --accent:#4ade80;--accent-d:#22a35a;--warn:#f4b942;--line:#27392d;}
+    --accent:#4ade80;--accent-d:#22a35a;--warn:#f4b942;--line:#27392d;--blue:#58a6ff;}
   *{box-sizing:border-box}
   body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
     background:var(--bg);color:var(--ink);min-height:100vh}
@@ -17,11 +17,12 @@
     padding:18px;margin-bottom:16px}
   .step{font-size:.78rem;color:var(--accent);letter-spacing:.06em;
     text-transform:uppercase;margin-bottom:8px}
-  label{display:block;font-size:.92rem;color:var(--muted);margin:12px 0 6px}
+  .opt{color:var(--muted);font-size:.72rem;text-transform:none;letter-spacing:0}
+  label{display:block;font-size:.9rem;color:var(--muted);margin:10px 0 6px}
   input[type=file]{width:100%;padding:12px;border-radius:12px;border:1px solid var(--line);
-    background:#0e1b14;color:var(--ink);font-size:.98rem}
-  input[type=number]{width:100%;padding:13px;border-radius:12px;border:1px solid var(--line);
-    background:#0e1b14;color:var(--ink);font-size:1.05rem}
+    background:#0e1b14;color:var(--ink);font-size:.95rem}
+  input[type=number],input[type=text]{width:100%;padding:13px;border-radius:12px;
+    border:1px solid var(--line);background:#0e1b14;color:var(--ink);font-size:1.05rem}
   .toggle{display:flex;gap:10px;margin-top:6px}
   .toggle button{flex:1;padding:12px;border-radius:10px;border:1px solid var(--line);
     background:#0e1b14;color:var(--muted);font-size:1rem;cursor:pointer}
@@ -30,7 +31,8 @@
   button.primary{width:100%;padding:16px;border:0;border-radius:12px;font-size:1.15rem;
     font-weight:700;cursor:pointer;background:var(--accent);color:#06210f;margin-top:18px}
   button.primary:active{background:var(--accent-d)}
-  .result{display:none;text-align:center;padding:26px 18px;
+  button.save{background:var(--blue);color:#06210f}
+  .result{display:none;text-align:center;padding:24px 18px;
     background:linear-gradient(160deg,#16271d,#1a2f22)}
   .result .big{font-size:3.4rem;font-weight:800;color:var(--accent);line-height:1.05}
   .result .unit{font-size:1.1rem;color:var(--muted);margin-top:4px}
@@ -38,20 +40,22 @@
   .pill{display:inline-block;background:#0e1b14;border:1px solid var(--line);
     border-radius:999px;padding:5px 13px;font-size:.8rem;color:var(--muted);margin-top:14px}
   .readout{font-size:.86rem;color:var(--muted);margin-top:10px}
+  .farmerbox{display:none;margin-top:18px;padding-top:16px;border-top:1px solid var(--line);text-align:left}
   .status{font-size:.82rem;color:var(--muted);text-align:center;margin-top:8px}
   .err{color:var(--warn)}
-  a.small{color:var(--muted);font-size:.82rem;text-decoration:none;display:block;
-    text-align:center;margin-top:22px}
+  .okmsg{color:var(--accent);font-size:.9rem;margin-top:8px;text-align:center}
+  a.small{color:var(--muted);font-size:.82rem;text-decoration:none;display:inline-block;margin:6px 12px 0 0}
   .spin{display:inline-block;width:16px;height:16px;border:3px solid var(--line);
-    border-top-color:var(--accent);border-radius:50%;animation:s .8s linear infinite;
-    vertical-align:middle}
+    border-top-color:var(--accent);border-radius:50%;animation:s .8s linear infinite;vertical-align:middle}
   @keyframes s{to{transform:rotate(360deg)}}
+  pre{background:#0e1b14;border:1px solid var(--line);border-radius:8px;padding:10px;
+    font-size:.72rem;overflow-x:auto;color:var(--muted);margin-top:6px}
 </style>
 </head>
 <body>
 <div class="wrap">
   <h1>🌱 Irrigation Advisor</h1>
-  <div class="sub">Plot T2 — upload the node's SD-card file and get watering advice.</div>
+  <div class="sub">Plot T2 — upload the node file and get watering advice.</div>
 
   <div class="card">
     <div class="step">Step 1 · Sensor file</div>
@@ -61,7 +65,17 @@
   </div>
 
   <div class="card">
-    <div class="step">Step 2 · Did it rain since last time?</div>
+    <div class="step">Step 2 · Irrigation history file <span class="opt">(optional)</span></div>
+    <label>Upload the events table (past rain &amp; irrigation records)</label>
+    <input id="eventsFile" type="file" accept=".csv">
+    <div class="readout" id="eventsNote"></div>
+    <pre>date,type,amount,unit,farmer_would_water,farmer_reason
+2026-06-10,irrigation,30,minutes,20,soil looked dry
+2026-06-15,rain,1.0,hours,0,rain expected</pre>
+  </div>
+
+  <div class="card">
+    <div class="step">Step 3 · Did it rain today?</div>
     <div class="toggle">
       <button id="rainNo" class="on" onclick="setRain(false)">No</button>
       <button id="rainYes" onclick="setRain(true)">Yes</button>
@@ -69,18 +83,6 @@
     <div id="rainBox" class="hidden">
       <label>About how many hours of rain?</label>
       <input id="rainHours" type="number" inputmode="decimal" min="0" step="0.5" placeholder="e.g. 1.5">
-    </div>
-  </div>
-
-  <div class="card">
-    <div class="step">Step 3 · Did you water since last time?</div>
-    <div class="toggle">
-      <button id="irrNo" class="on" onclick="setIrr(false)">No</button>
-      <button id="irrYes" onclick="setIrr(true)">Yes</button>
-    </div>
-    <div id="irrBox" class="hidden">
-      <label>For how many minutes did the drip run?</label>
-      <input id="irrMin" type="number" inputmode="decimal" min="0" step="5" placeholder="e.g. 30">
     </div>
   </div>
 
@@ -92,31 +94,46 @@
     <div class="sub2" id="resNote"></div>
     <div class="pill" id="resPill"></div>
     <div class="readout" id="readingNote"></div>
+
+    <!-- Farmer's own judgment, shown after the model's rec -->
+    <div class="farmerbox" id="farmerBox">
+      <div class="step">Your decision</div>
+      <label>How many minutes would <b>you</b> water?</label>
+      <input id="farmerMin" type="number" inputmode="decimal" min="0" step="5" placeholder="e.g. 10">
+      <label>Why? <span class="opt">(optional)</span></label>
+      <input id="farmerReason" type="text" placeholder="e.g. soil still looks moist">
+      <button class="primary save" id="saveFarmer">Save my choice</button>
+      <div class="okmsg" id="farmerMsg"></div>
+    </div>
   </div>
 
   <div class="status" id="modelStatus"></div>
-  <a class="small" href="/events">Log rain / irrigation events →</a>
-  <a class="small" href="/research" style="display:block;margin-top:8px">Researcher view →</a>
+  <div>
+    <a class="small" href="/research">Researcher view →</a>
+  </div>
 </div>
 
 <script>
 const PLANTING = "2026-06-08";
-let rained=false, irrigated=false;
+let rained=false;
+let lastModelMin=null, lastMoisture=null;
+
 function setRain(v){rained=v;
   document.getElementById('rainYes').classList.toggle('on',v);
   document.getElementById('rainNo').classList.toggle('on',!v);
   document.getElementById('rainBox').classList.toggle('hidden',!v);}
-function setIrr(v){irrigated=v;
-  document.getElementById('irrYes').classList.toggle('on',v);
-  document.getElementById('irrNo').classList.toggle('on',!v);
-  document.getElementById('irrBox').classList.toggle('hidden',!v);}
+
 document.getElementById('file').onchange=(e)=>{const f=e.target.files[0];
   document.getElementById('fileNote').textContent=f?`Selected: ${f.name}`:'';};
+document.getElementById('eventsFile').onchange=(e)=>{const f=e.target.files[0];
+  document.getElementById('eventsNote').textContent=f?`Selected: ${f.name}`:'';};
+
 async function refreshStatus(){try{
   const s=await (await fetch('/api/status')).json();
   document.getElementById('modelStatus').textContent=
     `Model v${s.model_version??0} · ${s.state}`+(s.message?` · ${s.message}`:'');
 }catch(e){}}
+
 document.getElementById('go').onclick=async ()=>{
   const f=document.getElementById('file').files[0];
   if(!f){alert('Please choose the CSV from the SD card first.');return;}
@@ -124,14 +141,17 @@ document.getElementById('go').onclick=async ()=>{
   fd.append('file',f); fd.append('planting_date',PLANTING);
   fd.append('rained',rained?'yes':'no');
   fd.append('rain_hours',rained?(document.getElementById('rainHours').value||0):0);
-  fd.append('irrigated',irrigated?'yes':'no');
-  fd.append('irrigation_minutes',irrigated?(document.getElementById('irrMin').value||0):0);
+  const ef=document.getElementById('eventsFile').files[0];
+  if(ef){ fd.append('events_file', ef); }
+
   const res=document.getElementById('result'); res.style.display='block';
   document.getElementById('bigNum').innerHTML='<span class="spin"></span>';
   document.getElementById('bigUnit').textContent='reading file…';
   document.getElementById('resNote').textContent='';
   document.getElementById('resPill').textContent='';
   document.getElementById('readingNote').textContent='';
+  document.getElementById('farmerBox').style.display='none';
+  document.getElementById('farmerMsg').textContent='';
   try{
     const r=await fetch('/api/upload',{method:'POST',body:fd});
     const d=await r.json();
@@ -139,6 +159,7 @@ document.getElementById('go').onclick=async ()=>{
       document.getElementById('bigUnit').className='unit err';
       document.getElementById('bigUnit').textContent=d.error||'Error';return;}
     const rec=d.recommendation, lr=d.latest_reading;
+    lastModelMin=rec.drip_minutes; lastMoisture=lr.moisture_pct;
     document.getElementById('bigNum').textContent=rec.drip_minutes;
     document.getElementById('bigUnit').className='unit';
     document.getElementById('bigUnit').textContent=
@@ -147,14 +168,37 @@ document.getElementById('go').onclick=async ()=>{
       rec.drip_minutes===0?'Soil is wet enough for now.':`${rec.litres_per_plant} litres per plant`;
     document.getElementById('resPill').textContent=
       `${rec.stage} · advises for ${rec.time} · model v${rec.model_version}`;
-    document.getElementById('readingNote').textContent=
-      `Latest reading from file: ${lr.moisture_pct}% moisture`+
-      (d.events_logged.length?` · logged: ${d.events_logged.map(e=>e.type).join(', ')}`:'')+
-      ` · model is refining safely in the background.`;
+    let note=`Latest reading from file: ${lr.moisture_pct}% moisture`;
+    if(d.events_history && d.events_history.ok){
+      note += ` · ${d.events_history.summary}`;
+    }
+    note += ` · model is refining safely in the background.`;
+    document.getElementById('readingNote').textContent=note;
+    // Show the farmer's own-decision box
+    document.getElementById('farmerBox').style.display='block';
     setTimeout(refreshStatus,1500);
   }catch(e){document.getElementById('bigUnit').className='unit err';
     document.getElementById('bigUnit').textContent='Could not reach server';}
 };
+
+document.getElementById('saveFarmer').onclick=async ()=>{
+  const fm=document.getElementById('farmerMin').value;
+  if(fm===''){alert('Enter how many minutes you would water.');return;}
+  const fd=new FormData();
+  fd.append('model_minutes', lastModelMin??0);
+  fd.append('farmer_minutes', fm);
+  fd.append('moisture_pct', lastMoisture??0);
+  fd.append('reason', document.getElementById('farmerReason').value||'');
+  const msg=document.getElementById('farmerMsg');
+  msg.textContent='Saving…';
+  try{
+    const r=await fetch('/api/farmer_judgment',{method:'POST',body:fd});
+    const d=await r.json();
+    msg.textContent = d.ok ? '✓ Saved. Model said '+(lastModelMin)+' min, you chose '+fm+' min.'
+                           : 'Could not save.';
+  }catch(e){ msg.textContent='Could not reach server.'; }
+};
+
 refreshStatus(); setInterval(refreshStatus,8000);
 </script>
 </body>

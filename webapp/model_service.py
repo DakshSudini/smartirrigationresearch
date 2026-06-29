@@ -194,6 +194,22 @@ class ModelService:
         for e in events:
             audit("field_event", source=Path(csv_path).name, **e)
 
+    def log_farmer_judgment(self, model_minutes, farmer_minutes, reason,
+                            moisture_pct, date_str):
+        """Record today's on-screen farmer judgment next to the model's rec."""
+        ev_file = LOGS / "farmer_judgments.jsonl"
+        rec = {"ts": datetime.utcnow().isoformat() + "Z",
+               "date": date_str,
+               "moisture_pct": moisture_pct,
+               "model_minutes": model_minutes,
+               "farmer_minutes": farmer_minutes,
+               "farmer_reason": reason}
+        with open(ev_file, "a") as f:
+            f.write(json.dumps(rec) + "\n")
+        audit("farmer_judgment", date=date_str,
+              model_minutes=model_minutes, farmer_minutes=farmer_minutes,
+              reason=reason or "")
+
     # ---- process an uploaded events CSV (rain/irrigation + farmer judgment) ----
     def process_events_csv(self, csv_path, planting_date="2026-06-08"):
         """

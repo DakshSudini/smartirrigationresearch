@@ -55,11 +55,6 @@ def research():
     return (HERE / "static" / "research.html").read_text()
 
 
-@app.get("/events", response_class=HTMLResponse)
-def events_page():
-    return (HERE / "static" / "events.html").read_text()
-
-
 @app.post("/api/upload_events")
 async def api_upload_events(file: UploadFile = File(...),
                             planting_date: str = Form("2026-06-08")):
@@ -78,14 +73,14 @@ async def api_upload_events(file: UploadFile = File(...),
 
 @app.post("/api/upload")
 async def api_upload(file: UploadFile = File(...),
+                     events_file: UploadFile = File(None),
                      planting_date: str = Form("2026-06-08"),
                      rained: str = Form("no"),
-                     rain_hours: float = Form(0.0),
-                     irrigated: str = Form("no"),
-                     irrigation_minutes: float = Form(0.0)):
-    """Worker uploads the SD-card CSV and logs any rain / irrigation the file
-    cannot record. App reads the latest moisture from the CSV automatically and
-    advises for the NEXT 9 AM / 2 PM window."""
+                     rain_hours: float = Form(0.0)):
+    """Single farm action: upload the SD-card sensor CSV (and optionally an
+    events-history CSV in the same submit). The app reads the latest moisture
+    from the sensor file, advises for the next 9 AM / 2 PM window, and (if an
+    events file is given) logs that history with model-vs-farmer comparison."""
     if not file.filename.lower().endswith(".csv"):
         raise HTTPException(400, "Please upload a .csv from the sensor node.")
     ts = datetime.utcnow().strftime("%Y%m%dT%H%M%S")
@@ -97,12 +92,21 @@ async def api_upload(file: UploadFile = File(...),
     if not latest["ok"]:
         return JSONResponse({"ok": False, "error": latest["error"]})
 
+    # today's rain toggle
     events = []
-    if str(irrigated).lower() in ("yes", "true", "1") and irrigation_minutes > 0:
-        events.append({"type": "irrigation", "minutes": irrigation_minutes})
     if str(rained).lower() in ("yes", "true", "1") and rain_hours > 0:
         events.append({"type": "rain", "hours": rain_hours})
-    service.log_events(str(dest), events)
+    if events:
+        service.log_events(str(dest), events)
+
+    # optional events-history file uploaded in the same submit
+    events_result = None
+    if events_file is not None and events_file.filename:
+        if events_file.filename.lower().endswith(".csv"):
+            ed = UPLOADS / f"events_{ts}_{events_file.filename}"
+            with open(ed, "wb") as f:
+                shutil.copyfileobj(events_file.file, f)
+            events_result = service.process_events_csv(str(ed), planting_date)
 
     window = service.next_decision_window()
     dat = _days_after(planting_date)
@@ -111,7 +115,24 @@ async def api_upload(file: UploadFile = File(...),
     started = service.refine_async(str(dest), planting_date)
     return JSONResponse({"ok": True, "saved": dest.name,
                          "latest_reading": latest, "events_logged": events,
+                         "events_history": events_result,
                          "recommendation": rec, "refine": started})
+
+
+@app.post("/api/farmer_judgment")
+async def api_farmer_judgment(model_minutes: int = Form(...),
+                              farmer_minutes: float = Form(...),
+                              moisture_pct: float = Form(...),
+                              reason: str = Form(""),
+                              date: str = Form(None)):
+    """Record today's on-screen farmer judgment next to the model's rec."""
+    from datetime import date as _date
+    d = date or _date.today().isoformat()
+    service.log_farmer_judgment(model_minutes, farmer_minutes, reason,
+                                moisture_pct, d)
+    return JSONResponse({"ok": True,
+                         "message": "Recorded the farmer's choice alongside "
+                                    "the model's recommendation."})
 
 
 @app.post("/api/recommend")
