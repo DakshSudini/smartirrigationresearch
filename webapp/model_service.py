@@ -210,8 +210,33 @@ class ModelService:
               model_minutes=model_minutes, farmer_minutes=farmer_minutes,
               reason=reason or "")
 
+    # ---- helper: moisture at a given date's morning window, from sensor CSV ----
+    def _moisture_on_date(self, sensor_df, date_s, plot_id,
+                          target_hour=9, tolerance_h=3.0):
+        """Actual moisture (%) for `plot_id` nearest `target_hour` IST on
+        `date_s` (YYYY-MM-DD), within +/- tolerance_h. Returns None if no
+        reading qualifies — callers must handle None, never substitute a
+        made-up value."""
+        import pandas as _pd
+        if sensor_df is None or len(sensor_df) == 0:
+            return None
+        g = sensor_df[sensor_df["plot_id"].str.upper() == plot_id.upper()]
+        if len(g) == 0:
+            return None
+        try:
+            target = _pd.Timestamp(f"{date_s} {target_hour:02d}:00",
+                                   tz="Asia/Kolkata")
+        except Exception:
+            return None
+        delta = (g["dt"] - target).abs()
+        i = delta.idxmin()
+        if delta.loc[i] > _pd.Timedelta(hours=tolerance_h):
+            return None
+        return float(g.loc[i, "M"])
+
     # ---- process an uploaded events CSV (rain/irrigation + farmer judgment) ----
-    def process_events_csv(self, csv_path, planting_date="2026-06-08"):
+    def process_events_csv(self, csv_path, planting_date="2026-06-08",
+                           sensor_csv_path=None):
         """
         Parse an events table uploaded by the farm worker / researcher.
 
@@ -227,6 +252,12 @@ class ModelService:
 
         For each irrigation row we also compute the model's recommendation for
         that day, so the page can show model-vs-farmer side by side.
+
+        The model recommendation for a historical day is only computed when
+        the ACTUAL moisture for that day is available from `sensor_csv_path`
+        (the T2 plot's reading nearest 9 AM IST). If it is not available the
+        row's model_minutes is null with an explanatory note — a comparison
+        computed at an invented moisture is not research-valid.
         Returns {ok, rows:[...], summary}.
         """
         import csv as _csv
@@ -237,6 +268,15 @@ class ModelService:
                 reader = list(_csv.DictReader(f))
         except Exception as e:
             return {"ok": False, "error": f"Could not read CSV: {e}"}
+
+        # Load the sensor file once (if provided) for real per-day moisture.
+        t2_plot = self.cfg["actuator"].get("t2_plot_id", "P1")
+        sensor_df = None
+        if sensor_csv_path:
+            try:
+                sensor_df = load_field_csvs([sensor_csv_path])
+            except Exception:
+                sensor_df = None   # rows will carry model_minutes=None + note
 
         if not reader:
             return {"ok": False, "error": "The file has no rows."}
@@ -280,17 +320,25 @@ class ModelService:
 
             row = {"date": date_s, "type": etype, "amount": amt, "unit": unit}
 
-            # Model recommendation for that day (morning window), if we have a model
+            # Model recommendation for that day (morning window) — computed
+            # ONLY at the day's real T2-plot moisture. No moisture, no number.
             model_minutes = None
+            moisture_used = None
             if etype == "irrigation" and self.agent is not None:
-                # We don't have the soil moisture for that historical day here,
-                # so we use a neutral mid-band moisture as a reference point.
-                rec = self.recommend(moisture_pct=60.0, hour=9,
-                                     days_after_transplant=dat)
-                if rec.get("ok"):
-                    model_minutes = rec.get("drip_minutes")
+                moisture_used = self._moisture_on_date(sensor_df, date_s,
+                                                       t2_plot)
+                if moisture_used is not None:
+                    rec = self.recommend(moisture_pct=moisture_used, hour=9,
+                                         days_after_transplant=dat)
+                    if rec.get("ok"):
+                        model_minutes = rec.get("drip_minutes")
+                else:
+                    row["model_note"] = (f"No {t2_plot} sensor reading near "
+                                         f"9 AM IST on {date_s}; model "
+                                         f"comparison omitted.")
 
             row["model_minutes"] = model_minutes
+            row["moisture_used_pct"] = moisture_used
             if farmer_min:
                 try:
                     row["farmer_minutes"] = float(farmer_min)
@@ -349,10 +397,16 @@ class ModelService:
                 "plot_id": str(row["plot_id"])}
 
     def next_decision_window(self, now_hour=None):
-        """Next decision hour (9 or 14) given the current hour."""
+        """Next decision hour (9 or 14) in LOCAL FARM TIME (IST).
+
+        The server runs in UTC (Render), so datetime.now() must not be used
+        bare: at 4 PM IST it would report 10 AM and wrongly pick the 14:00
+        window that has already passed.
+        """
         import datetime as _dt
+        from zoneinfo import ZoneInfo
         if now_hour is None:
-            now_hour = _dt.datetime.now().hour
+            now_hour = _dt.datetime.now(ZoneInfo("Asia/Kolkata")).hour
         windows = sorted(self.cfg["actuator"]["decision_hours"])
         for w in windows:
             if now_hour <= w:

@@ -79,14 +79,22 @@ actuator:
   action_litres_per_plant: [0.0, 0.25, 0.5, 1.0, 1.5, 2.0]
   # Drip flow rate per emitter (L/h) — used only to translate litres into an
   # equivalent run-time for the field worker (display convenience).
-  emitter_rate_L_per_h: 2.0
+  # CONFIRMED 1 L/h (field emitters, ~1 per plant). Was 2.0, which halved
+  # every displayed run-time. Must match field_loader.DRIP_RATE_L_PER_H.
+  emitter_rate_L_per_h: 1.0
   emitters_per_plant: 1
   # Hard safety caps
   max_daily_volume_L_per_plant: 4.0   # absolute upper bound per plant per day
-  # Two decision windows per day (24-h local time): 9 AM and 2 PM
+  # Two decision windows per day (24-h LOCAL IST time): 9 AM and 2 PM
   decision_hours: [9, 14]
-  # Sensor logging cadence (Rapidcircuitry nodes): 15 minutes
-  sensor_interval_minutes: 15
+  # Sensor logging cadence (Rapidcircuitry/ESP32 nodes): 5 minutes (300 s,
+  # verified against TST1234_001-004 median inter-sample gap)
+  sensor_interval_minutes: 5
+  # Which plot the RL agent (T2) controls. Field assignment (July 2026):
+  #   P1 = T2 (IQL agent)   P2 = T0 (farmer)   P3 = T1 (fixed control)
+  # NOTE: the node firmware's `treatment` CSV column does NOT reflect this
+  # (it tags P1=0, P2=1, P3=1) — software maps plot_id -> treatment instead.
+  t2_plot_id: "P1"
 
 # ---------- State / observation ----------
 state:

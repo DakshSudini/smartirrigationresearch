@@ -38,11 +38,15 @@ service = ModelService()
 
 
 def _days_after(planting_date: str) -> int:
+    from zoneinfo import ZoneInfo
     try:
         pd = datetime.strptime(planting_date, "%Y-%m-%d").date()
     except ValueError:
         raise HTTPException(400, "planting_date must be YYYY-MM-DD")
-    return max((date.today() - pd).days, 0)
+    # Farm-local (IST) date; the server clock is UTC, which is one day
+    # behind between midnight and 05:30 IST.
+    today_ist = datetime.now(ZoneInfo("Asia/Kolkata")).date()
+    return max((today_ist - pd).days, 0)
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -88,7 +92,11 @@ async def api_upload(file: UploadFile = File(...),
     with open(dest, "wb") as f:
         shutil.copyfileobj(file.file, f)
 
-    latest = service.latest_moisture_from_csv(str(dest))
+    # The recommendation is for the T2 (agent) plot, so it must be driven by
+    # that plot's own probe — not whichever node happened to transmit last.
+    # (Inter-plot probe offsets are ~4 pts, larger than the day-to-day signal.)
+    t2_plot = service.cfg["actuator"].get("t2_plot_id", "P1")
+    latest = service.latest_moisture_from_csv(str(dest), plot_filter=t2_plot)
     if not latest["ok"]:
         return JSONResponse({"ok": False, "error": latest["error"]})
 
@@ -106,7 +114,8 @@ async def api_upload(file: UploadFile = File(...),
             ed = UPLOADS / f"events_{ts}_{events_file.filename}"
             with open(ed, "wb") as f:
                 shutil.copyfileobj(events_file.file, f)
-            events_result = service.process_events_csv(str(ed), planting_date)
+            events_result = service.process_events_csv(
+                str(ed), planting_date, sensor_csv_path=str(dest))
 
     window = service.next_decision_window()
     dat = _days_after(planting_date)

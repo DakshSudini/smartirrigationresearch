@@ -6,16 +6,25 @@ files TST1234_*.csv) and reconciles them with the hand-kept irrigation/rain
 event log into labelled (state, action, next_state) transitions for simulator
 calibration.
 
-FIELD SETUP (confirmed June 2026)
+FIELD SETUP (confirmed July 2026)
 ---------------------------------
   - Study TST1234, English cucumber, planting 2026-06-08
-  - Plots P1 (treatment 0), P2, P3 (treatment 1)
-    NOTE: during this window ALL THREE plots received the SAME irrigation,
-    so the data are three replicates of one regime, not a treatment contrast.
+  - Treatment assignment (authoritative, per researcher, July 2026):
+        P1 = T2 (IQL agent plot)
+        P2 = T0 (farmer's traditional schedule)
+        P3 = T1 (fixed 12-min alternate-day control)
+    WARNING: the node firmware's `treatment` CSV column does NOT match this
+    (it tags P1=0, P2=1, P3=1). Use PLOT_TREATMENT below, never the raw
+    column, for analysis. The raw column is kept as `treatment_fw` for
+    provenance.
+    NOTE: through late June ALL THREE plots received the SAME irrigation,
+    so that window is three replicates of one regime, not a contrast.
   - Sensor depth: 20 cm only (single layer)
   - Sample cadence: 5 minutes (300 s)
   - Drip: 1 L/h per emitter, emitters every 30 cm, ~1 emitter per plant
     => irrigation minutes map to litres-per-plant at 1 L/h.
+  - All timestamps are epoch seconds (UTC); analysis is done in IST
+    (Asia/Kolkata). `dt` in the returned frame is tz-aware IST.
 
 EVENT LOG (per plant, all plots same)
 -------------------------------------
@@ -44,8 +53,14 @@ import pandas as pd
 
 DRIP_RATE_L_PER_H = 1.0   # per emitter ~ per plant
 
-# Event log — single source of truth. Times are local; if a specific clock
-# time is unknown we assume the standard morning window (08:30) for irrigation.
+TZ = "Asia/Kolkata"       # all field operations and event clock times are IST
+
+# Authoritative plot -> treatment mapping (July 2026). The firmware CSV
+# `treatment` column is WRONG for P1/P2 — do not use it for analysis.
+PLOT_TREATMENT = {"P1": "T2", "P2": "T0", "P3": "T1"}
+
+# Event log — single source of truth. Times are local IST; if a specific
+# clock time is unknown we assume the morning window (08:30) for irrigation.
 IRRIGATION_EVENTS = [
     # (date, clock_time, minutes)
     ("2026-06-10", "08:30", 30),   # 0.50 L/plant
@@ -72,26 +87,36 @@ class FieldTransition:
 
 
 def load_field_csvs(paths: List[str | Path]) -> pd.DataFrame:
-    """Read and concatenate the TST CSVs into a tidy per-(dt, plot) frame."""
+    """Read and concatenate the TST CSVs into a tidy per-(dt, plot) frame.
+
+    `dt` is tz-aware IST (epoch seconds are UTC; the previous naive
+    conversion silently reported times 5 h 30 min early).
+    `treatment` is the corrected label from PLOT_TREATMENT; the raw firmware
+    column is preserved as `treatment_fw`.
+    """
     frames = []
     for p in paths:
         df = pd.read_csv(p, comment="#")
         frames.append(df)
     df = pd.concat(frames, ignore_index=True)
-    df["dt"] = pd.to_datetime(df["epoch_unix"], unit="s")
+    df["dt"] = (pd.to_datetime(df["epoch_unix"], unit="s", utc=True)
+                  .dt.tz_convert(TZ))
     df["plot_id"] = df["plot_id"].str.upper()
     df["M"] = df["moist_pct_x10"] / 10.0
     df["T"] = df["temp_c_x10"] / 10.0
+    df["treatment_fw"] = df["treatment"]                 # raw firmware tag
+    df["treatment"] = df["plot_id"].map(PLOT_TREATMENT)  # corrected label
     df = (df.drop_duplicates(subset=["epoch_unix", "plot_id"])
             .sort_values("dt")
             .reset_index(drop=True))
-    return df[["dt", "plot_id", "M", "T", "treatment", "depth_cm"]]
+    return df[["dt", "plot_id", "M", "T", "treatment", "treatment_fw",
+               "depth_cm"]]
 
 
 def _irrigation_litres_at(ts: pd.Timestamp) -> float:
     """Return litres/plant if an irrigation event falls in the hour before ts."""
     for date, clock, minutes in IRRIGATION_EVENTS:
-        ev = pd.Timestamp(f"{date} {clock}")
+        ev = pd.Timestamp(f"{date} {clock}", tz=TZ)
         # attribute the event to the first sensor row within 1 h after it
         if ev <= ts < ev + pd.Timedelta(hours=1):
             return DRIP_RATE_L_PER_H * minutes / 60.0
@@ -100,7 +125,7 @@ def _irrigation_litres_at(ts: pd.Timestamp) -> float:
 
 def _is_rain(ts: pd.Timestamp) -> bool:
     for date, clock, _hours in RAIN_EVENTS:
-        ev = pd.Timestamp(f"{date} {clock}")
+        ev = pd.Timestamp(f"{date} {clock}", tz=TZ)
         if abs((ts - ev).total_seconds()) <= RAIN_WINDOW_H * 3600:
             return True
     return False
