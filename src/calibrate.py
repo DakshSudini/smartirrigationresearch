@@ -165,9 +165,12 @@ def calibrate_from_log(log_path: str,
        contrast in this short dataset from pot 1 comparison).
 
     4. Because we have no air-temperature data (same gap as Fyllo), Ra is
-       held at its Fyllo-calibrated value (36 MJ m-2 d-1). Ke_max is also
-       held because bare-soil evaporation in a closed greenhouse pot is
-       low — the surface is covered by the canopy.
+       held at its Fyllo-calibrated value (~21 MJ m-2 d-1 — the surface-effective
+       radiation term after atmospheric attenuation for Telangana at ~17°N; the
+       raw extraterrestrial constant of ~36 overestimates surface ET, so the
+       calibrated value sits well below it). Ke_max is also held because
+       bare-soil evaporation in a closed greenhouse pot is low — the surface is
+       covered by the canopy.
 
     Parameters
     ----------

@@ -21,7 +21,7 @@ Then open http://localhost:8000
 from __future__ import annotations
 
 import shutil
-from datetime import datetime, date
+from datetime import datetime, date, timezone
 from pathlib import Path
 
 import os, secrets
@@ -67,7 +67,7 @@ async def api_upload_events(file: UploadFile = File(...),
     No admin key needed — the worker can use this."""
     if not file.filename.lower().endswith(".csv"):
         raise HTTPException(400, "Please upload a .csv events table.")
-    ts = datetime.utcnow().strftime("%Y%m%dT%H%M%S")
+    ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
     dest = UPLOADS / f"events_{ts}_{file.filename}"
     with open(dest, "wb") as f:
         shutil.copyfileobj(file.file, f)
@@ -87,7 +87,7 @@ async def api_upload(file: UploadFile = File(...),
     events file is given) logs that history with model-vs-farmer comparison."""
     if not file.filename.lower().endswith(".csv"):
         raise HTTPException(400, "Please upload a .csv from the sensor node.")
-    ts = datetime.utcnow().strftime("%Y%m%dT%H%M%S")
+    ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
     dest = UPLOADS / f"{ts}_{file.filename}"
     with open(dest, "wb") as f:
         shutil.copyfileobj(file.file, f)

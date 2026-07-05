@@ -1,13 +1,24 @@
 """
-deploy.py
-=========
+deploy.py  ⚠️ DEPRECATED — DO NOT USE AS-IS
+==========================================
+This module targets the OLD actuator model (pulse-minutes: `action_pulse_minutes`,
+`allowed_hours`, `decision_interval_minutes`, `min_interval_minutes`). Those
+config keys were removed when the actuator moved to litres-per-plant with two
+fixed decision windows, so this file will raise KeyError/AttributeError if run.
+
+Nothing imports it. The live inference path is now `webapp/model_service.py`
+(recommendation + shadow-promotion), and the T0/T1/T2 evaluation harness lives in
+`benchmark.py`. If you need a standalone safety wrapper / policy-comparison CLI
+again, port this to the litres action space and the canonical observation builder
+(`src/obs.build_obs`) first — see CODE_REVIEW issue #3. Kept in the tree only for
+reference until that port happens.
+
+Original description
+--------------------
 Runtime inference + safety wrapper. The trained IQL policy never
 issues an action that would (a) exceed the daily volume cap, (b) fire
 outside permitted hours, or (c) fall under the min-interval safety
-fence.
-
-Also provides `compare_policies(...)`, the head-to-head harness used
-by the research evaluation (T0 vs T1 vs T2).
+fence. Also provides `compare_policies(...)`, the head-to-head harness.
 """
 
 from __future__ import annotations

@@ -97,22 +97,26 @@ actuator:
   t2_plot_id: "P1"
 
 # ---------- State / observation ----------
+# Canonical 14-D vector — built ONLY by src/obs.build_obs (that file is the
+# authoritative definition). This list documents it; keep the two in sync.
+# NOTE slot 13 is the decision-window flag (0 at 09:00, 1 at 14:00), NOT
+# hours-since-irrigation. The live model was trained on this layout.
 state:
   features:
-    - moisture_surface
-    - moisture_deep
-    - soil_temperature
-    - delta_moisture_surface_1h
-    - delta_moisture_deep_1h
-    - hour_sin
-    - hour_cos
-    - day_since_transplant_norm
-    - stage_onehot_initial
-    - stage_onehot_development
-    - stage_onehot_mid
-    - stage_onehot_late
-    - cum_water_today_norm
-    - hours_since_last_irrigation_norm
+    - moisture_surface            # 0
+    - moisture_deep               # 1
+    - soil_temperature            # 2
+    - delta_moisture_surface_1h   # 3
+    - delta_moisture_deep_1h      # 4
+    - hour_sin                    # 5
+    - hour_cos                    # 6
+    - day_since_transplant_norm   # 7
+    - stage_onehot_initial        # 8
+    - stage_onehot_development    # 9
+    - stage_onehot_mid            # 10
+    - stage_onehot_late           # 11
+    - cum_water_today_norm        # 12
+    - session_flag                # 13  (0 = 09:00 window, 1 = 14:00 window)
 
 # ---------- Reward ----------
 # r = -alpha * volume_norm  -  beta * stress  -  gamma * over_moisture

@@ -39,6 +39,7 @@ from .simulator import SimConfig, stage_from_day
 from .env import EnvConfig, IrrigationEnv
 from .initial_policy import InitialPolicy, InitialPolicyConfig
 from .iql import IQLAgent, IQLConfig, ReplayBuffer
+from .obs import build_obs
 
 
 # --------------------------------------------------------------------- #
@@ -161,28 +162,27 @@ def augment_with_real_transitions(buf: ReplayBuffer, env: IrrigationEnv,
     ])
     print(f"Real-data augmentation: {len(trans)} eligible rows")
     t0 = trans["dt"].iloc[0]
+    cap_mm = env.cfg.max_daily_water_L_per_plant * env.cfg.plants_per_m2
     added = 0
     for r in trans.itertuples(index=False):
         hour = r.dt.hour + r.dt.minute / 60.0
         day  = (r.dt - t0).days
         stage = stage_from_day(day, env.sim_cfg.stage_days)
-        stage_oh = [0.0] * 4; stage_oh[stage] = 1.0
-        obs = np.array([
-            (r.M_surface - 50.0) / 30.0,
-            (r.M_deep - 50.0) / 30.0,
-            (r.T_soil - 25.0) / 5.0,
-            0.0, 0.0,                                    # dM features
-            float(np.sin(2 * np.pi * hour / 24.0)),
-            float(np.cos(2 * np.pi * hour / 24.0)),
-            min(day, 100) / 100.0,
-            *stage_oh,
-            0.0,                                          # cum_water
-            0.5,                                          # hrs_since_irrig
-        ], dtype=np.float32)
-        nxt = obs.copy()
-        nxt[0] = (r.M_surface_next - 50.0) / 30.0
-        nxt[1] = (r.M_deep_next    - 50.0) / 30.0
-        nxt[2] = (r.T_soil_next    - 25.0) / 5.0
+        # Canonical builder; session_flag 0 for current step, 1 for next. Fyllo
+        # rows are observational (no decision window) but the flag must carry a
+        # valid {0,1} value consistent with env/serving, not a 0.5.
+        obs = build_obs(
+            M_surf=r.M_surface, M_deep=r.M_deep, T_soil=r.T_soil,
+            hour=hour, day=day, stage_idx=stage,
+            cum_water_today_mm=0.0, daily_cap_mm=cap_mm, session_flag=0.0,
+            dM_surf=0.0, dM_deep=0.0,
+        )
+        nxt = build_obs(
+            M_surf=r.M_surface_next, M_deep=r.M_deep_next, T_soil=r.T_soil_next,
+            hour=(hour + 1) % 24, day=day, stage_idx=stage,
+            cum_water_today_mm=0.0, daily_cap_mm=cap_mm, session_flag=1.0,
+            dM_surf=0.0, dM_deep=0.0,
+        )
         # Heuristic reward from the observed state (proxy)
         lo, hi = env.cfg.optimal_band[
             ["initial","development","mid","late"][stage]]
@@ -250,26 +250,26 @@ def augment_with_log_transitions(buf: ReplayBuffer, env: IrrigationEnv,
     stage_oh = [1.0, 0.0, 0.0, 0.0]
 
     lo, hi = env.cfg.optimal_band["initial"]
+    cap_mm = env.cfg.max_daily_water_L_per_plant * env.cfg.plants_per_m2
     added = 0
     for t in net_trans:
-        # State uses M as both surface and deep (single-depth sensor)
-        obs = np.array([
-            (t.M      - 50.0) / 30.0,   # moisture_surface (normalised)
-            (t.M      - 50.0) / 30.0,   # moisture_deep (placeholder = surface)
-            (t.T      - 30.0) / 5.0,    # soil_temperature (pots run warmer)
-            0.0, 0.0,                    # dM features (unknown at single depth)
-            float(np.sin(2 * np.pi * t.dt.hour / 24.0)),
-            float(np.cos(2 * np.pi * t.dt.hour / 24.0)),
-            0.05,                        # day_norm: early-stage proxy
-            *stage_oh,
-            float(t.action_mL / 1000.0),    # cum_water_today_norm proxy
-            0.5,                             # hrs_since_irrig (unknown)
-        ], dtype=np.float32)
-
-        nxt = obs.copy()
-        nxt[0] = (t.M_next - 50.0) / 30.0
-        nxt[1] = (t.M_next - 50.0) / 30.0
-        nxt[2] = (t.T_next - 30.0) / 5.0
+        # Pot readings: single depth (M for both layers), no decision window,
+        # no known cum-water. session_flag=0/1; cum_water from the logged pulse.
+        # Built via the canonical builder so slot semantics match env/serving
+        # exactly — previously this path wrote 0.5 into slot 13, teaching the net
+        # a different meaning for that input than it uses at deployment.
+        obs = build_obs(
+            M_surf=t.M, M_deep=t.M, T_soil=t.T,
+            hour=t.dt.hour, day=5, stage_idx=stage_idx,
+            cum_water_today_mm=t.action_mL / 1000.0 * env.cfg.plants_per_m2,
+            daily_cap_mm=cap_mm, session_flag=0.0, dM_surf=0.0, dM_deep=0.0,
+        )
+        nxt = build_obs(
+            M_surf=t.M_next, M_deep=t.M_next, T_soil=t.T_next,
+            hour=(t.dt.hour + 1) % 24, day=5, stage_idx=stage_idx,
+            cum_water_today_mm=t.action_mL / 1000.0 * env.cfg.plants_per_m2,
+            daily_cap_mm=cap_mm, session_flag=1.0, dM_surf=0.0, dM_deep=0.0,
+        )
 
         # Reward: same structure as the rest of the system
         M_root  = t.M_next                             # single-layer

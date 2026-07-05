@@ -31,7 +31,7 @@ import threading
 import time
 import traceback
 from dataclasses import asdict
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -50,6 +50,7 @@ from src.iql import IQLAgent, IQLConfig
 from src.calibrate import (calibrate, calibrate_from_log, calibrate_from_field)
 from src.data_loader import load_fyllo_excel, build_observed_transitions
 from src.field_loader import load_field_csvs, build_field_transitions
+from src.obs import build_obs
 
 
 STORAGE = Path(__file__).resolve().parent / "storage"
@@ -65,11 +66,17 @@ LIVE_SIMCFG = MODELS / "live_simcfg.json"
 STATUS_FILE = MODELS / "status.json"
 
 
+def _utc_now_iso() -> str:
+    """Timezone-aware UTC timestamp (ISO-8601, trailing Z).
+    datetime.utcnow() is deprecated in Python 3.12 and returns a naive value."""
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
+
+
 # --------------------------------------------------------------------------
 # Audit logging
 # --------------------------------------------------------------------------
 def audit(event: str, **fields):
-    rec = {"ts": datetime.utcnow().isoformat() + "Z", "event": event, **fields}
+    rec = {"ts": _utc_now_iso(), "event": event, **fields}
     with open(AUDIT_LOG, "a") as f:
         f.write(json.dumps(rec) + "\n")
     return rec
@@ -175,7 +182,7 @@ class ModelService:
         LIVE_SIMCFG.write_text(json.dumps(asdict(self.sim_cfg), indent=2,
                                           default=float))
         write_status(state="ready", model_version=model_version,
-                     last_refine=datetime.utcnow().isoformat() + "Z", note=note)
+                     last_refine=_utc_now_iso(), note=note)
 
     # ---- recommendation ------------------------------------------------
     # ---- worker-reported rain / irrigation events ---------------------
@@ -187,7 +194,7 @@ class ModelService:
         if not events:
             return
         ev_file = LOGS / "field_events.jsonl"
-        rec = {"ts": datetime.utcnow().isoformat() + "Z",
+        rec = {"ts": _utc_now_iso(),
                "source_csv": Path(csv_path).name, "events": events}
         with open(ev_file, "a") as f:
             f.write(json.dumps(rec) + "\n")
@@ -198,7 +205,7 @@ class ModelService:
                             moisture_pct, date_str):
         """Record today's on-screen farmer judgment next to the model's rec."""
         ev_file = LOGS / "farmer_judgments.jsonl"
-        rec = {"ts": datetime.utcnow().isoformat() + "Z",
+        rec = {"ts": _utc_now_iso(),
                "date": date_str,
                "moisture_pct": moisture_pct,
                "model_minutes": model_minutes,
@@ -292,7 +299,9 @@ class ModelService:
 
         out_rows = []
         logged = []
-        for raw in reader:
+        skipped = []          # rows dropped (bad date/type) — surfaced, not hidden
+        coerced = []          # rows whose amount could not be parsed → treated as 0
+        for lineno, raw in enumerate(reader, start=2):  # +1 header, +1 to 1-index
             r = norm(raw)
             date_s = r.get("date", "")
             etype  = r.get("type", "").lower()
@@ -302,11 +311,16 @@ class ModelService:
             reason = r.get("farmer_reason", "")
 
             if not date_s or etype not in ("rain", "irrigation"):
-                continue  # skip malformed rows silently
+                skipped.append({"line": lineno,
+                                "reason": "missing date or type not rain/irrigation",
+                                "raw": {k: raw.get(k) for k in list(raw)[:4]}})
+                continue
 
             try:
                 amt = float(amount) if amount else 0.0
             except ValueError:
+                coerced.append({"line": lineno, "date": date_s,
+                                "bad_amount": amount})
                 amt = 0.0
             if not unit:
                 unit = "hours" if etype == "rain" else "minutes"
@@ -371,9 +385,16 @@ class ModelService:
 
         n_irr = sum(1 for r in out_rows if r["type"] == "irrigation")
         n_rain = sum(1 for r in out_rows if r["type"] == "rain")
+        summary = (f"{len(out_rows)} events logged "
+                   f"({n_irr} irrigation, {n_rain} rain).")
+        if skipped:
+            summary += f" {len(skipped)} row(s) skipped (bad date/type)."
+        if coerced:
+            summary += (f" {len(coerced)} row(s) had an unreadable amount and "
+                        f"were treated as 0 — verify these.")
         return {"ok": True, "rows": out_rows,
-                "summary": f"{len(out_rows)} events logged "
-                           f"({n_irr} irrigation, {n_rain} rain)."}
+                "skipped_rows": skipped, "coerced_rows": coerced,
+                "summary": summary}
 
     # ---- read latest moisture from an uploaded node CSV ---------------
     def latest_moisture_from_csv(self, csv_path, plot_filter=None):
@@ -427,24 +448,20 @@ class ModelService:
 
         env = IrrigationEnv(self.env_cfg, self.sim_cfg,
                             rng=np.random.default_rng(0))
-        # Build an observation matching env._obs at the given state
+        # Canonical builder so serving can never drift from training. dM=0
+        # (single snapshot, no history); cum_water=0 (fresh decision); temp is a
+        # shade-house placeholder because the form has no live soil-temp input.
         s_deep = moisture_deep_pct if moisture_deep_pct is not None else moisture_pct
         stage = stage_from_day(days_after_transplant, self.sim_cfg.stage_days)
-        stage_oh = [0.0] * 4
-        stage_oh[stage] = 1.0
         session_flag = 0.0 if hour <= 11 else 1.0
-        cap = max(self.env_cfg.max_daily_water_L_per_plant
-                  * self.env_cfg.plants_per_m2, 1e-3)
-        obs = np.array([
-            (moisture_pct - 50.0) / 30.0,
-            (s_deep - 50.0) / 30.0,
-            (30.0 - 25.0) / 5.0,           # soil temp placeholder (shade ~30C)
-            0.0, 0.0,
-            float(np.sin(2 * np.pi * hour / 24.0)),
-            float(np.cos(2 * np.pi * hour / 24.0)),
-            min(days_after_transplant, 100) / 100.0,
-            *stage_oh, 0.0, session_flag,
-        ], dtype=np.float32)
+        cap = (self.env_cfg.max_daily_water_L_per_plant
+               * self.env_cfg.plants_per_m2)
+        obs = build_obs(
+            M_surf=moisture_pct, M_deep=s_deep, T_soil=30.0,
+            hour=hour, day=days_after_transplant, stage_idx=stage,
+            cum_water_today_mm=0.0, daily_cap_mm=cap,
+            session_flag=session_flag, dM_surf=0.0, dM_deep=0.0,
+        )
 
         a_idx = self.agent.act(obs, deterministic=True)
         litres = self.env_cfg.action_litres_per_plant[a_idx]

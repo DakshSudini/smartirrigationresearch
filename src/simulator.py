@@ -151,6 +151,12 @@ class SoilWaterSim:
         # Internal cache for daily ET0
         self._daily_et0: Dict[int, float] = {}
 
+    # Sum of the diurnal half-sine weights over a 24-h day. Used to normalise
+    # the hourly ET0 distribution so it integrates to et0_day exactly.
+    _DIURNAL_WEIGHT_SUM = float(sum(
+        max(np.sin(np.pi * (h - 5) / 14.0), 0.0) for h in range(24)
+    ))
+
     # ----- ET0 (Hargreaves; coarse, since only T_soil is observed) ---
     def _et0_mm_day(self, day: int, T_mean: float, T_range: float = 8.0) -> float:
         if day in self._daily_et0:
@@ -222,12 +228,15 @@ class SoilWaterSim:
         stage = stage_from_day(s.day, cfg.stage_days)
         Kc    = kc_for_stage(stage, cfg.Kc)
 
-        # Reference ET (daily mean) → per hour with a Gaussian-ish bump
+        # Reference ET (daily mean) → per hour, distributed over daylight.
         et0_day = self._et0_mm_day(s.day, T_mean=s.T_soil)
-        # Diurnal distribution: peaks 12:00, zero at night
+        # Diurnal distribution: half-sine peaking ~noon, zero at night.
+        # Normalise by the ACTUAL 24-h sum of the weights so the hourly values
+        # integrate back to et0_day exactly (previously two hand-tuned constants,
+        # 1/0.637 and 24/14, cancelled to ~0.5% only by coincidence; this is
+        # exact and self-documenting).
         diurnal_w = max(np.sin(np.pi * (s.hour - 5) / 14.0), 0.0)
-        diurnal_w_norm = diurnal_w / 0.637  # so daily sum equals et0_day
-        et0_h = et0_day * diurnal_w_norm / 24.0 * (24.0 / 14.0)  # spread over daylight
+        et0_h = et0_day * diurnal_w / self._DIURNAL_WEIGHT_SUM
         # Crop ET (potential)
         etc_h = Kc * et0_h
         # Stress reduction based on the weighted root zone moisture

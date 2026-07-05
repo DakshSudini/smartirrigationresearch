@@ -46,6 +46,7 @@ import numpy as np
 
 from .simulator import (SimConfig, SoilWaterSim, kc_for_stage,
                         stage_from_day)
+from .obs import build_obs, OBS_DIM as _OBS_DIM
 
 
 @dataclass
@@ -66,7 +67,7 @@ class EnvConfig:
 class IrrigationEnv:
     """Gym-like API: reset → obs; step(action) → obs, r, done, info."""
 
-    OBS_DIM = 14
+    OBS_DIM = _OBS_DIM
 
     def __init__(self, env_cfg: EnvConfig, sim_cfg: SimConfig,
                  rng: np.random.Generator = None):
@@ -90,27 +91,19 @@ class IrrigationEnv:
 
     # ----- observation ----------------------------------------------
     def _obs(self, session_flag: float) -> np.ndarray:
+        """Build the observation via the canonical builder (src/obs.py) so
+        training and serving can never diverge on layout/normalisation."""
         s = self.sim.state
         dM_surf = (s.M_surf - self._M_surf_prev) if self._M_surf_prev is not None else 0.0
         dM_deep = (s.M_deep - self._M_deep_prev) if self._M_deep_prev is not None else 0.0
         stage = stage_from_day(s.day, self.sim_cfg.stage_days)
-        stage_oh = [0.0] * 4
-        stage_oh[stage] = 1.0
-        cap = max(self.cfg.max_daily_water_L_per_plant * self.cfg.plants_per_m2, 1e-3)
-        obs = np.array([
-            (s.M_surf - 50.0) / 30.0,
-            (s.M_deep - 50.0) / 30.0,
-            (s.T_soil - 25.0) / 5.0,
-            dM_surf / 10.0,
-            dM_deep / 10.0,
-            float(np.sin(2 * np.pi * s.hour / 24.0)),
-            float(np.cos(2 * np.pi * s.hour / 24.0)),
-            min(s.day, 100) / 100.0,
-            *stage_oh,
-            s.cum_water_today_mm / cap,
-            float(session_flag),
-        ], dtype=np.float32)
-        return obs
+        cap = self.cfg.max_daily_water_L_per_plant * self.cfg.plants_per_m2
+        return build_obs(
+            M_surf=s.M_surf, M_deep=s.M_deep, T_soil=s.T_soil,
+            hour=s.hour, day=s.day, stage_idx=stage,
+            cum_water_today_mm=s.cum_water_today_mm, daily_cap_mm=cap,
+            session_flag=session_flag, dM_surf=dM_surf, dM_deep=dM_deep,
+        )
 
     # ----- reset ----------------------------------------------------
     def reset(self, day0: int = 0,

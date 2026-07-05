@@ -41,6 +41,7 @@ from .calibrate import _mask_no_irrigation, calibrate
 from .env import EnvConfig, IrrigationEnv
 from .iql import IQLAgent, IQLConfig, ReplayBuffer
 from .simulator import SimConfig, stage_from_day
+from .obs import build_obs
 
 
 # --------------------------------------------------------------------- #
@@ -48,13 +49,15 @@ from .simulator import SimConfig, stage_from_day
 # --------------------------------------------------------------------- #
 @dataclass
 class SensorEvent:
-    plot_id: str         # "T0_fixed", "T1_initial", "T2_iql"
+    plot_id: str         # "T0", "T1", "T2"  (see field_loader.PLOT_TREATMENT)
     timestamp: float     # unix seconds
     M_surf: float
     M_deep: float
     T_soil: float
-    # Action logged by the controller on that plot at that step
-    action_pulse_min: int = 0
+    # Action logged by the controller on that plot at that step, in
+    # litres-per-plant (the actuator's native unit). The old pulse-minutes
+    # field was removed with the actuator redesign.
+    action_L: float = 0.0
     cum_water_today_mm: float = 0.0
     hours_since_irrig: float = 24.0
     day_since_transplant: int = 0
@@ -93,9 +96,10 @@ def compute_residuals(stream: PerPlotStream,
         sim.cfg.sigma_M = 0.0; sim.cfg.sigma_T = 0.0
         sim.reset(day0=e0.day_since_transplant,
                   M_surf0=e0.M_surf, M_deep0=e0.M_deep, T_soil0=e0.T_soil)
-        # Approximate logged irrigation as mm
-        litres = (e0.action_pulse_min / 60.0) * 2.0  # 2 L/h emitter default
-        mm = litres * sim_cfg.plants_per_m2
+        # Logged action is already litres/plant; convert to mm over the plant's
+        # ground area (litres * plants_per_m2). No emitter-rate factor here —
+        # that only matters for minutes<->litres display.
+        mm = e0.action_L * sim_cfg.plants_per_m2
         s, _ = sim.step(mm)
         dM_surf_res += (e1.M_surf - s.M_surf)
         dM_deep_res += (e1.M_deep - s.M_deep)
@@ -115,21 +119,15 @@ def compute_residuals(stream: PerPlotStream,
 def event_to_obs(e: SensorEvent, env_cfg: EnvConfig,
                  sim_cfg: SimConfig) -> np.ndarray:
     stage = stage_from_day(e.day_since_transplant, sim_cfg.stage_days)
-    stage_oh = [0.0] * 4; stage_oh[stage] = 1.0
     hour = (e.timestamp / 3600.0) % 24.0
-    return np.array([
-        (e.M_surf - 50.0) / 30.0,
-        (e.M_deep - 50.0) / 30.0,
-        (e.T_soil - 25.0) / 5.0,
-        0.0, 0.0,
-        float(np.sin(2 * np.pi * hour / 24.0)),
-        float(np.cos(2 * np.pi * hour / 24.0)),
-        min(e.day_since_transplant, 100) / 100.0,
-        *stage_oh,
-        e.cum_water_today_mm / max(env_cfg.max_daily_water_L_per_plant
-                                    * env_cfg.plants_per_m2, 1e-3),
-        min(e.hours_since_irrig, 48.0) / 48.0,
-    ], dtype=np.float32)
+    session_flag = 0.0 if hour <= 11 else 1.0
+    cap_mm = env_cfg.max_daily_water_L_per_plant * env_cfg.plants_per_m2
+    return build_obs(
+        M_surf=e.M_surf, M_deep=e.M_deep, T_soil=e.T_soil,
+        hour=hour, day=e.day_since_transplant, stage_idx=stage,
+        cum_water_today_mm=e.cum_water_today_mm, daily_cap_mm=cap_mm,
+        session_flag=session_flag, dM_surf=0.0, dM_deep=0.0,
+    )
 
 
 def compute_reward(e_curr: SensorEvent, e_next: SensorEvent,
@@ -143,9 +141,10 @@ def compute_reward(e_curr: SensorEvent, e_next: SensorEvent,
     over = max(e_curr.M_surf - 95.0, 0.0) / 5.0
     if stage == 2:
         stress *= 1.5
-    # water proxy from logged action
-    max_pulse = max(env_cfg.action_pulse_minutes)
-    water = e_curr.action_pulse_min / max(max_pulse, 1)
+    # water proxy from logged action (litres/plant normalised by the largest
+    # available action volume)
+    max_litres = max(env_cfg.action_litres_per_plant)
+    water = e_curr.action_L / max(max_litres, 1e-6)
     return -(env_cfg.alpha_water * water
              + env_cfg.beta_stress * stress
              + env_cfg.gamma_oversat * over)
@@ -191,9 +190,9 @@ class OnlineUpdater:
             e0 = stream.events[-1]
             obs0 = event_to_obs(e0, self.env_cfg, self.sim_cfg)
             obs1 = event_to_obs(ev, self.env_cfg, self.sim_cfg)
-            # Action index = position in pulse list (closest match)
-            pulses = self.env_cfg.action_pulse_minutes
-            a_idx = int(np.argmin(np.abs(np.array(pulses) - e0.action_pulse_min)))
+            # Action index = closest litres option to the logged litres/plant
+            litres_opts = self.env_cfg.action_litres_per_plant
+            a_idx = int(np.argmin(np.abs(np.array(litres_opts) - e0.action_L)))
             r = compute_reward(e0, ev, self.env_cfg, self.sim_cfg)
             self.buf.add(obs0, a_idx, r, obs1, False)
             self.n_new_since_train += 1
