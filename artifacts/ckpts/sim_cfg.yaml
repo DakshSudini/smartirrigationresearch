@@ -9,7 +9,11 @@ Ra_MJ_m2_day: 21.0
 SAT: 100.0
 WP: 25.0
 deep_depth_m: 0.3
+enable_rain: true
+p_rain_per_day: 0.073
 plants_per_m2: 5.56
+rain_hour: 4
+rain_mm_mean: 8.0
 root_depth_init_m: 0.1
 root_depth_max_m: 0.4
 shade_et0_factor: 0.8
