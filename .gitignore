@@ -1,4 +1,8 @@
-artifacts/ckpts/
+# Intermediate checkpoints stay out of git; the deployed model + sim config
+# are tracked deliberately so every Render deploy bootstraps the correct model.
+artifacts/ckpts/*
+!artifacts/ckpts/iql_final.pt
+!artifacts/ckpts/sim_cfg.yaml
 src/__pycache__/
 __pycache__/
 *.pyc

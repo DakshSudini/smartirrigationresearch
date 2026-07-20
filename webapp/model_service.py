@@ -161,6 +161,7 @@ class ModelService:
             self.agent.load_state_dict(torch.load(LIVE_CKPT, map_location="cpu",
                                                   weights_only=False))
             write_status(state="ready",
+                         model_version=max(read_status().get("model_version", 0), 1),
                          message="Live model loaded.")
         else:
             # bootstrap: copy the packaged checkpoint if present
